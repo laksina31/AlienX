@@ -1,67 +1,129 @@
 # ==============================================================================
-#  ALIENX launcher - downloads Alienx_Setting.exe from GitHub, runs it, cleans up
-#
-#  Customer command (Windows PowerShell):
-#    irm https://raw.githubusercontent.com/USER/REPO/main/Alienx_Run.ps1 | iex
+#  ALIENX launcher
+#  Download Alienx_Setting.exe from GitHub -> verify -> run -> cleanup
 # ==============================================================================
 
-# ---------------------------- CONFIG (edit these) -----------------------------
-# GitHub Releases link: always points to the file named Alienx_Setting.exe in your LATEST release
-$ExeUrl = "https://github.com/laksina31/AlienX/blob/main/Alienx_Setting.exe"
+$ExeUrl = "https://raw.githubusercontent.com/laksina31/AlienX/main/Alienx_Setting.exe"
 
-# Optional safety lock: paste the SHA-256 of your exe (Get-FileHash .\Alienx_Setting.exe)
-# and the launcher will refuse to run any other file. Leave "" to skip the check.
+# ใส่ SHA-256 ถ้าต้องการล็อกไฟล์
 $ExpectedSha256 = ""
-# ------------------------------------------------------------------------------
 
 $ErrorActionPreference = "Stop"
-$ProgressPreference = "SilentlyContinue"   # downloads are much faster in Windows PowerShell 5.1
-try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+$ProgressPreference = "SilentlyContinue"
 
-function Write-Step($text, $color) {
-    if (-not $color) { $color = "Cyan" }
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+} catch {}
+
+function Write-Step($text, $color = "Cyan") {
     Write-Host "  $text" -ForegroundColor $color
 }
 
 Write-Host ""
 Write-Host "  ALIENX  -  CMD BY EMPEROR STORE" -ForegroundColor Cyan
-Write-Host "  -------------------------------" -ForegroundColor DarkGray
+Write-Host "  --------------------------------" -ForegroundColor DarkGray
 Write-Host ""
 
-$exe = Join-Path $env:TEMP ("Alienx_" + [Guid]::NewGuid().ToString("N") + ".exe")
+$exe = Join-Path $env:TEMP (
+    "Alienx_" + [Guid]::NewGuid().ToString("N") + ".exe"
+)
 
 try {
-    if ($ExeUrl -match "USER/REPO") {
-        throw "Edit `$ExeUrl at the top of this script first (replace USER/REPO with your GitHub name and repository)."
-    }
 
-    Write-Step "[1/3] Downloading..."
+    # ==========================================================
+    # 1. DOWNLOAD
+    # ==========================================================
+
+    Write-Step "[1/4] Downloading..."
+
     Write-Step "      $ExeUrl" "DarkGray"
-    Invoke-WebRequest -Uri $ExeUrl -OutFile $exe -UseBasicParsing -Headers @{ "User-Agent" = "Mozilla/5.0" }
-    if (-not (Test-Path $exe)) { throw "The download did not create a file." }
-    if ((Get-Item $exe).Length -lt 10KB) { throw "The downloaded file is too small - check the link." }
 
-    Write-Step "[2/3] Checking the file..."
-    $hash = (Get-FileHash -Path $exe -Algorithm SHA256).Hash
-    Write-Step "      SHA-256 $hash" "DarkGray"
-    if ($ExpectedSha256 -and ($hash -ne $ExpectedSha256.Trim().ToUpper())) {
-        throw "SHA-256 does not match, so the file was NOT run."
+    Invoke-WebRequest `
+        -Uri $ExeUrl `
+        -OutFile $exe `
+        -UseBasicParsing `
+        -Headers @{
+            "User-Agent" = "Mozilla/5.0"
+        }
+
+    if (!(Test-Path $exe)) {
+        throw "Download failed: file was not created."
     }
 
-    Write-Step "[3/3] Starting ALIENX (allow the administrator prompt)..."
-    Start-Process -FilePath $exe -Verb RunAs -Wait
-    Write-Step "Closed. Bye!" "DarkGray"
+    $file = Get-Item $exe
+
+    if ($file.Length -lt 10KB) {
+        throw "Downloaded file is too small. GitHub may not be returning the EXE."
+    }
+
+    Write-Step "      Size: $([math]::Round($file.Length / 1MB, 2)) MB" "DarkGray"
+
+
+    # ==========================================================
+    # 2. CHECK PE HEADER
+    # ==========================================================
+
+    Write-Step "[2/4] Checking EXE..."
+
+    $bytes = [System.IO.File]::ReadAllBytes($exe)
+
+    if ($bytes.Length -lt 2) {
+        throw "Downloaded file is invalid."
+    }
+
+    # Windows PE files start with MZ
+    if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+        throw "Downloaded file is NOT a valid Windows EXE. Check the GitHub file URL."
+    }
+
+    Write-Step "      Windows PE detected." "Green"
+
+
+    # ==========================================================
+    # 3. SHA-256
+    # ==========================================================
+
+    Write-Step "[3/4] Checking SHA-256..."
+
+    $hash = (Get-FileHash -Path $exe -Algorithm SHA256).Hash.ToUpper()
+
+    Write-Step "      SHA-256: $hash" "DarkGray"
+
+    if ($ExpectedSha256 -and
+        ($hash -ne $ExpectedSha256.Trim().ToUpper())) {
+
+        throw "SHA-256 mismatch. File was NOT executed."
+    }
+
+    Write-Step "      File check passed." "Green"
+
+
+    # ==========================================================
+    # 4. RUN
+    # ==========================================================
+
+    Write-Step "[4/4] Starting ALIENX..." "Cyan"
+    Write-Step "      Administrator permission may appear." "DarkGray"
+
+    Start-Process `
+        -FilePath $exe `
+        -Verb RunAs `
+        -Wait
+
+    Write-Host ""
+    Write-Step "ALIENX closed." "Green"
 }
 catch {
+
     Write-Host ""
-    Write-Host "  [!] $($_.Exception.Message)" -ForegroundColor Red
-    if ($_.Exception.Message -match "404|Not Found") {
-        Write-Host "      The link is wrong, or the repository / release is not public." -ForegroundColor DarkGray
-    }
-    if ($_.Exception.Message -match "canceled|cancelled") {
-        Write-Host "      ALIENX needs administrator rights. Run the command again and click Yes." -ForegroundColor DarkGray
-    }
+    Write-Host "  [!] ERROR" -ForegroundColor Red
+    Write-Host "      $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host ""
 }
 finally {
-    Remove-Item -Path $exe -Force -ErrorAction SilentlyContinue
+
+    # Cleanup downloaded EXE
+    if (Test-Path $exe) {
+        Remove-Item $exe -Force -ErrorAction SilentlyContinue
+    }
 }
